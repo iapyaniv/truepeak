@@ -6,7 +6,11 @@ The meter and limiter share a Kaiser-windowed sinc resampler with 4x, 8x, or 16x
 
 ## Usage
 
-Requires Rust 1.96 or later.
+Available on [crates.io](https://crates.io/crates/truepeak). Requires Rust 1.96 or later.
+
+```sh
+cargo add truepeak
+```
 
 ```toml
 [dependencies]
