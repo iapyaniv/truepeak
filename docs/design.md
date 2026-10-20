@@ -34,6 +34,16 @@ Both streams are zero-padded outside the input. Flush ends the stream and is ide
 
 ## Meter
 
+The measurement API is available in `meter` and re-exported at the crate root:
+
+| Functions | Result |
+|---|---|
+| `true_peak`, `true_peak_with_control` | Overall true peak |
+| `true_peak_per_channel`, `true_peak_per_channel_with_control` | True peaks in channel order |
+| `true_peak_in_range`, `true_peak_in_range_with_control` | Overall true peak in a base-rate frame range |
+| `true_peak_per_channel_in_range`, `true_peak_per_channel_in_range_with_control` | True peaks in a range, in channel order |
+| `sample_peak`, `sample_peak_with_control` | Exact overall and per-channel sample maxima |
+
 The meter upsamples one channel at a time in bounded blocks and scans the interpolated output for peaks. At each local maximum of absolute amplitude it fits a parabola through the three signed neighboring samples. For samples `left`, `center`, and `right`, the refined value is:
 
 ```text
@@ -47,6 +57,10 @@ Zero curvature or an offset outside half a grid step falls back to the center sa
 A sampled grid can miss a tone's continuous peak by `20 * log10(cos(pi * f / f_grid))` dB: about 0.14 dB at 8x for 20 kHz at 44.1 kHz. Refinement reduces this error; phase-sweep tests require readings within 0.02 dB of known tone peaks at all three factors. The recommended factor is 8x. These tests characterize the estimator rather than proving a bound for arbitrary waveforms.
 
 Peak positions compensate interpolation delay. Zero padding can produce a boundary peak outside the input duration. Ties retain the first channel and earliest grid peak. Silence reads negative infinity dBTP with position zero. `sample_peak` instead measures exact absolute input-sample maxima, with the same validation and tie rules.
+
+Range functions take `range: std::ops::Range<usize>` after the oversampling factor; controlled variants then take the cancellation flag and progress sink. Frames must satisfy `start <= end <= len`, otherwise the call returns `Error::InvalidInput`. Empty ranges read silence with position zero. For a nonempty range the upsampler processes `[start.saturating_sub(margin), min(len, end.saturating_add(margin)))`, where `margin = ceil(delay / L) + 1`: the filter half length in base-rate frames plus one frame for refinement, currently 39 frames. Only local peaks whose refined, delay-compensated frame position `p` satisfies `start <= p < end` are selected. Positions remain relative to the whole input. Full-input ranges `0..len` preserve the whole-file scan, including padding peaks outside the input duration, and match existing functions bit for bit. Progress counts processed base-rate samples across channels, including context; cancellation returns no partial result. Non-finite samples in the processed context are rejected.
+
+Slicing a file before measuring invents a zero-padded boundary at the cut, whose ringing can dominate the reading. For a 48 kHz, 50.15625 Hz sine at amplitude 0.99, cutting at 1.6 seconds ends near a sine peak: the standalone slice reads +1.05724295 dBTP at 8x, while the continuous signal and `true_peak_in_range(..., 0..76800)` both read −0.08728187 dBTP. Surrounding context preserves the continuous interpolation; selecting refined positions excludes peaks outside the requested range, though their sinc sidelobes can still contribute peaks inside it.
 
 FFmpeg's `ebur128` uses a fixed 192 kHz true-peak grid and rounds its summary to 0.1 dB. At 12 kHz, that grid can under-read by about 0.17 dB, so the comparison permits `truepeak - FFmpeg` from −0.05 to +0.25 dB. The bounds are ±0.1 dB at 997 Hz and 5 kHz, and −0.05 to +0.5 dB at higher test frequencies. Independent phase sweeps and EBU vectors check accuracy separately.
 
@@ -94,7 +108,7 @@ If the measured peak exceeds the requested ceiling, the next target is lowered b
 
 Offline output drops leading latency and retains exactly the input frame count. The returned gain series takes the minimum gain per configured hop, across channels, from the pass that produced the audio. Values are in dB and at most zero.
 
-Progress uses pass 0 for initial measurement, then passes 1 through `max_passes`. Counters count base-rate samples across channels. A limiting pass includes both processing and verification, for a total of `2 * frames * channels`. A quantized bypass extends pass 0's total to include its verification scan. Standalone meters use pass 1 and a total of `frames * channels`.
+Progress uses pass 0 for initial measurement, then passes 1 through `max_passes`. Counters count base-rate samples across channels. A limiting pass includes both processing and verification, for a total of `2 * frames * channels`. A quantized bypass extends pass 0's total to include its verification scan. Standalone meters use pass 1 and a total of `frames * channels`; range meters count the processed context frames.
 
 ## Memory and performance
 

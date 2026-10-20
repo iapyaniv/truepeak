@@ -1,7 +1,7 @@
 mod common;
 
 use std::{fs, path::PathBuf};
-use truepeak::true_peak_per_channel;
+use truepeak::{true_peak_per_channel, true_peak_per_channel_in_range};
 
 fn measure(sequence: u32, expected: f64) {
     let directory = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("fixtures/ebu");
@@ -47,7 +47,12 @@ fn measure(sequence: u32, expected: f64) {
     // EBU Tech 3341 (2023), Table 1, cases 15–20 specifies these readings
     // and the asymmetric tolerance: https://tech.ebu.ch/docs/tech/tech3341.pdf
     for factor in [4, 8, 16] {
-        for peak in true_peak_per_channel(&refs, spec.sample_rate, factor).unwrap() {
+        let peaks = true_peak_per_channel(&refs, spec.sample_rate, factor).unwrap();
+        let range_peaks =
+            true_peak_per_channel_in_range(&refs, spec.sample_rate, factor, 0..channels[0].len())
+                .unwrap();
+        for (peak, range_peak) in peaks.into_iter().zip(range_peaks) {
+            common::assert_peak_bits_eq(range_peak, peak);
             let error = peak.dbtp - expected;
             println!(
                 "EBU seq-3341-{sequence}, L={factor}, channel={}: {:.8} dBTP, expected={expected:.1}, error={error:+.8} dB",

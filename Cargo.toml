@@ -1,6 +1,6 @@
 [package]
 name = "truepeak"
-version = "0.1.0"
+version = "0.1.1"
 description = "True-peak measurement and lookahead limiting for planar f32 audio"
 license = "MIT"
 readme = "README.md"

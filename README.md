@@ -52,6 +52,8 @@ Inputs contain 1–8 equal-length channels at 44.1, 48, 88.2, 96, 176.4, or 192 
 
 `Limiter`, `Upsampler`, and `Downsampler` provide streaming processing. Meter functions ending in `_with_control` accept a cancellation flag and a progress callback. See the [API reference](https://docs.rs/truepeak) for field ranges and streaming contracts.
 
+For a section of a file, use `true_peak_in_range(&channels, 48_000, 8, 0..76_800)` or `true_peak_per_channel_in_range`. Ranges use base-rate frames and retain surrounding interpolation context; slicing the audio first can introduce ringing at the cut. Peak positions remain relative to the whole input. See the [meter design](docs/design.md#meter) for range and boundary semantics.
+
 ## WAV example
 
 ```sh

@@ -5,6 +5,16 @@ use std::f64::consts::{PI, TAU};
 pub const FREQUENCIES: [f64; 6] = [997.0, 5000.0, 12000.0, 17200.0, 19600.0, 20000.0];
 pub const RATES: [u32; 6] = [44100, 48000, 88200, 96000, 176400, 192000];
 
+pub fn assert_peak_bits_eq(actual: truepeak::TruePeak, expected: truepeak::TruePeak) {
+    assert_eq!(actual.dbtp.to_bits(), expected.dbtp.to_bits());
+    assert_eq!(actual.linear.to_bits(), expected.linear.to_bits());
+    assert_eq!(actual.channel, expected.channel);
+    assert_eq!(
+        actual.position_seconds.to_bits(),
+        expected.position_seconds.to_bits()
+    );
+}
+
 pub fn tone(rate: u32, frequency: f64, phase: f64, db: f64) -> Vec<f32> {
     let len = (rate / 10) as usize;
     let fade = (rate / 100) as usize;

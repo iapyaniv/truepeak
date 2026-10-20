@@ -1,4 +1,7 @@
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::{
+    ops::Range,
+    sync::atomic::{AtomicBool, Ordering},
+};
 
 use crate::{BLOCK, Error, Progress, Upsampler, validate_layout, validate_rate};
 
@@ -115,13 +118,17 @@ pub fn true_peak_with_control(
         cancel,
         progress,
     )?;
+    Ok(overall_peak(peaks))
+}
+
+fn overall_peak(peaks: Vec<TruePeak>) -> TruePeak {
     let mut best = peaks[0];
     for peak in peaks.into_iter().skip(1) {
         if peak.linear > best.linear {
             best = peak;
         }
     }
-    Ok(best)
+    best
 }
 
 /// Same validation and zero-padding semantics as [`true_peak`], in input channel order.
@@ -154,9 +161,109 @@ pub fn true_peak_per_channel_with_control(
         oversampling,
         cancel,
         progress,
-        BLOCK,
-        None,
+        PeakScan::default(),
     )
+}
+
+/// Measures local peaks whose refined, delay-compensated position is in `range`.
+/// The range uses base-rate frames and must satisfy `start <= end <= channel.len()`;
+/// otherwise returns [`Error::InvalidInput`]. Empty ranges read silence with position zero.
+/// Interpolation uses surrounding input, avoiding the ringing caused by slicing at a cut.
+/// Positions remain relative to the whole input; ties choose the first channel.
+/// A full-input range is bit-identical to [`true_peak`], including boundary padding peaks.
+pub fn true_peak_in_range(
+    channels: &[&[f32]],
+    sample_rate_hz: u32,
+    oversampling: u32,
+    range: Range<usize>,
+) -> Result<TruePeak, Error> {
+    true_peak_in_range_with_control(
+        channels,
+        sample_rate_hz,
+        oversampling,
+        range,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+}
+
+/// Measures the overall peak with the range and context rules of [`true_peak_in_range`].
+/// Progress counts processed base-rate samples across channels, including context, with pass 1.
+/// Cancellation is checked at block boundaries and returns no partial results.
+pub fn true_peak_in_range_with_control(
+    channels: &[&[f32]],
+    sample_rate_hz: u32,
+    oversampling: u32,
+    range: Range<usize>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<TruePeak, Error> {
+    let peaks = true_peak_per_channel_in_range_with_control(
+        channels,
+        sample_rate_hz,
+        oversampling,
+        range,
+        cancel,
+        progress,
+    )?;
+    Ok(overall_peak(peaks))
+}
+
+/// Same validation, context, and position semantics as [`true_peak_in_range`], in channel order.
+pub fn true_peak_per_channel_in_range(
+    channels: &[&[f32]],
+    sample_rate_hz: u32,
+    oversampling: u32,
+    range: Range<usize>,
+) -> Result<Vec<TruePeak>, Error> {
+    true_peak_per_channel_in_range_with_control(
+        channels,
+        sample_rate_hz,
+        oversampling,
+        range,
+        &AtomicBool::new(false),
+        &mut |_| {},
+    )
+}
+
+/// Measures per-channel peaks with the range rules of [`true_peak_in_range`]
+/// and progress/cancellation semantics of [`true_peak_in_range_with_control`].
+/// Non-finite samples in the processed range or its interpolation context are rejected.
+pub fn true_peak_per_channel_in_range_with_control(
+    channels: &[&[f32]],
+    sample_rate_hz: u32,
+    oversampling: u32,
+    range: Range<usize>,
+    cancel: &AtomicBool,
+    progress: &mut dyn FnMut(Progress),
+) -> Result<Vec<TruePeak>, Error> {
+    measure_peaks(
+        channels,
+        sample_rate_hz,
+        oversampling,
+        cancel,
+        progress,
+        PeakScan {
+            range: Some(range),
+            ..PeakScan::default()
+        },
+    )
+}
+
+struct PeakScan {
+    block_size: usize,
+    bit_depth: Option<u8>,
+    range: Option<Range<usize>>,
+}
+
+impl Default for PeakScan {
+    fn default() -> Self {
+        Self {
+            block_size: BLOCK,
+            bit_depth: None,
+            range: None,
+        }
+    }
 }
 
 fn measure_peaks(
@@ -165,9 +272,13 @@ fn measure_peaks(
     oversampling: u32,
     cancel: &AtomicBool,
     progress: &mut dyn FnMut(Progress),
-    block_size: usize,
-    bit_depth: Option<u8>,
+    scan: PeakScan,
 ) -> Result<Vec<TruePeak>, Error> {
+    let PeakScan {
+        block_size,
+        bit_depth,
+        range,
+    } = scan;
     let len = validate_layout(channels)?;
     validate_rate(sample_rate_hz)?;
     if !matches!(oversampling, 4 | 8 | 16) {
@@ -175,10 +286,26 @@ fn measure_peaks(
             "oversampling must be 4, 8, or 16".into(),
         ));
     }
+    let range = range.unwrap_or(0..len);
+    if range.start > range.end || range.end > len {
+        return Err(Error::InvalidInput(
+            "range must satisfy start <= end <= input length".into(),
+        ));
+    }
     check_cancel(cancel)?;
     let mut up = Upsampler::new(oversampling, sample_rate_hz)?;
     let delay = up.delay();
-    let total = len
+    // Preserve whole-file padding peaks, even when refinement places them outside the input.
+    let whole_file = range == (0..len);
+    // One extra base-rate frame supplies both neighbors for three-point refinement.
+    let margin = delay.div_ceil(oversampling as usize) + 1;
+    let context = if range.is_empty() {
+        range.clone()
+    } else {
+        range.start.saturating_sub(margin)..range.end.saturating_add(margin).min(len)
+    };
+    let total = context
+        .len()
         .checked_mul(channels.len())
         .ok_or_else(|| Error::InvalidInput("input length overflow".into()))?;
     let mut done = 0;
@@ -199,11 +326,22 @@ fn measure_peaks(
                     let [left, center] = neighbors;
                     let (value, offset) = refine_peak(left, center, right);
                     if value.abs() > best {
-                        best = value.abs();
-                        position = index as f64 - 1.0 + offset;
+                        let candidate = index as f64 - 1.0 + offset;
+                        let in_range = || {
+                            let frame = context.start as f64
+                                + (candidate - delay as f64) / oversampling as f64;
+                            center.abs() >= left.abs()
+                                && center.abs() >= right.abs()
+                                && frame >= range.start as f64
+                                && frame < range.end as f64
+                        };
+                        if whole_file || in_range() {
+                            best = value.abs();
+                            position = candidate;
+                        }
                     }
                 }
-                if right.abs() > best {
+                if whole_file && right.abs() > best {
                     best = right.abs();
                     position = index as f64;
                 }
@@ -211,7 +349,7 @@ fn measure_peaks(
                 index += 1;
             }
         };
-        for block in input.chunks(block_size) {
+        for block in input[context.clone()].chunks(block_size) {
             check_cancel(cancel)?;
             output.clear();
             if let Some(bits) = bit_depth {
@@ -235,8 +373,11 @@ fn measure_peaks(
             channel,
             position_seconds: if best == 0.0 {
                 0.0
-            } else {
+            } else if whole_file {
                 (position - delay as f64) / (sample_rate_hz as f64 * oversampling as f64)
+            } else {
+                (context.start as f64 + (position - delay as f64) / oversampling as f64)
+                    / sample_rate_hz as f64
             },
         });
     }
@@ -258,8 +399,10 @@ pub(crate) fn export_peak_with_control(
         oversampling,
         cancel,
         progress,
-        BLOCK,
-        bit_depth,
+        PeakScan {
+            bit_depth,
+            ..PeakScan::default()
+        },
     )?;
     Ok(peaks
         .iter()
@@ -344,21 +487,36 @@ mod tests {
             input[index - 1] = value * 0.6;
         }
         for factor in [4, 8, 16] {
-            let analyze = |block_size| {
-                measure_peaks(
-                    &[&input],
-                    44100,
-                    factor,
-                    &AtomicBool::new(false),
-                    &mut |_| {},
-                    block_size,
-                    None,
-                )
-                .unwrap()
-            };
-            let expected = analyze(input.len());
-            for block in [1, 7, 64, 4096] {
-                assert_eq!(analyze(block), expected, "L={factor}, block={block}");
+            for range in [
+                None,
+                Some(0..input.len()),
+                Some(40..1040),
+                Some(4094..4097),
+                Some(4999..input.len()),
+            ] {
+                let analyze = |block_size| {
+                    measure_peaks(
+                        &[&input],
+                        44100,
+                        factor,
+                        &AtomicBool::new(false),
+                        &mut |_| {},
+                        PeakScan {
+                            block_size,
+                            range: range.clone(),
+                            ..PeakScan::default()
+                        },
+                    )
+                    .unwrap()
+                };
+                let expected = analyze(input.len());
+                for block in [1, 7, 64, 4096] {
+                    assert_eq!(
+                        analyze(block),
+                        expected,
+                        "L={factor}, block={block}, {range:?}"
+                    );
+                }
             }
         }
     }

@@ -43,7 +43,9 @@ pub mod resample;
 pub use limiter::{Config, Limiter, Link, Output, limit};
 pub use meter::{
     ChannelSamplePeak, SamplePeak, TruePeak, sample_peak, sample_peak_with_control, true_peak,
-    true_peak_per_channel, true_peak_per_channel_with_control, true_peak_with_control,
+    true_peak_in_range, true_peak_in_range_with_control, true_peak_per_channel,
+    true_peak_per_channel_in_range, true_peak_per_channel_in_range_with_control,
+    true_peak_per_channel_with_control, true_peak_with_control,
 };
 pub use resample::{Downsampler, Upsampler};
 
