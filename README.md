@@ -6,7 +6,12 @@ The meter and limiter share a Kaiser-windowed sinc resampler with 4x, 8x, or 16x
 
 ## Usage
 
-Requires Rust 1.96 or later. The crate is not published to crates.io; use a Cargo path or Git dependency.
+Requires Rust 1.96 or later.
+
+```toml
+[dependencies]
+truepeak = "0.1"
+```
 
 ```rust
 use std::sync::atomic::AtomicBool;
@@ -41,7 +46,7 @@ Inputs contain 1–8 equal-length channels at 44.1, 48, 88.2, 96, 176.4, or 192 
 
 `limit` returns time-aligned float audio with the input frame count. `verify_bit_depth` measures a rounded, saturated 16- or 24-bit PCM copy; it does not quantize the returned audio. Check `ceiling_met` before accepting a render: a limited pass budget or quantization on bypass can leave the measured output above the ceiling.
 
-`Limiter`, `Upsampler`, and `Downsampler` provide streaming processing. Meter functions ending in `_with_control` accept a cancellation flag and a progress callback. Generate the API reference with `cargo doc --open` for field ranges and streaming contracts.
+`Limiter`, `Upsampler`, and `Downsampler` provide streaming processing. Meter functions ending in `_with_control` accept a cancellation flag and a progress callback. See the [API reference](https://docs.rs/truepeak) for field ranges and streaming contracts.
 
 ## WAV example
 

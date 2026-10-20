@@ -4,9 +4,9 @@ version = "0.1.0"
 description = "True-peak measurement and lookahead limiting for planar f32 audio"
 license = "MIT"
 readme = "README.md"
+repository = "https://github.com/iapyaniv/truepeak"
 edition = "2024"
 rust-version = "1.96"
-publish = false
 
 [features]
 default = []
