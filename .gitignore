@@ -1,0 +1,6 @@
+/target/
+/fixtures/private/
+/fixtures/ebu/
+*.wav
+*.WAV
+.DS_Store

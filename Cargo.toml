@@ -1,0 +1,43 @@
+[package]
+name = "truepeak"
+version = "0.1.0"
+description = "True-peak measurement and lookahead limiting for planar f32 audio"
+license = "MIT"
+readme = "README.md"
+edition = "2024"
+rust-version = "1.96"
+publish = false
+
+[features]
+default = []
+serde = ["dep:serde"]
+
+[dependencies]
+thiserror = "2"
+serde = { version = "1", features = ["derive"], optional = true }
+
+[dev-dependencies]
+hound = "3.5"
+clap = { version = "4", features = ["derive"] }
+serde_json = "1"
+tempfile = "3"
+
+[profile.test]
+opt-level = 2
+
+[[bench]]
+name = "meter"
+harness = false
+
+[[example]]
+name = "truepeak-cli"
+path = "examples/truepeak-cli/main.rs"
+test = true
+
+[[bench]]
+name = "limiter"
+harness = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
